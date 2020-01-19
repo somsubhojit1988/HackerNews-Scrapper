@@ -4,166 +4,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
+	"os"
 	"time"
 
+	"github.com/som.subhojit1988/hackernews-client/hnscrapper"
 	"golang.org/x/net/html"
 )
-
-const (
-	tablerowTag  = "tr" // <tr class="athing" id=$postId>
-	tabledataTag = "td"
-	anchorTag    = "a" // <a class="storylink" href=$storyURL>
-	spanTag      = "span"
-
-	athing    = "athing"
-	storylink = "storylink"
-	title     = "title"
-	from      = "from?"
-	sitestr   = "sitestr"
-
-	stateUnint   = -1
-	stateID      = 0
-	stateURL     = 1
-	stateTitle   = 2
-	stateSiteStr = 3
-)
-
-// ParseError indicates error parsing a html.Token
-type ParseError struct {
-	msg string
-}
-
-func (ptr *ParseError) Error() string {
-	return ptr.msg
-}
-
-// Post represent each post item from the Hacker News wall
-type Post struct {
-	ID      int
-	URL     string
-	Title   string
-	SiteStr string
-
-	Points        int
-	User          string
-	Posttime      string
-	CommentsCount int
-}
-
-func (p *Post) String() string {
-	return fmt.Sprintf(
-		` -- Post -- 
-		id        =   %d
-		URL       =   %s
-		Title     =   %s
-		SiteStr   =   %s
-		Points    =   %d
-		User      =   %s
-		Posttime  =   %s
-		nComments =   %d`,
-		p.ID,
-		p.URL,
-		p.Title,
-		p.SiteStr,
-		p.Points,
-		p.User,
-		p.Posttime,
-		p.CommentsCount)
-}
-
-func attributes(t *html.Token) map[string]string {
-	attrs := make(map[string]string)
-	for _, a := range t.Attr {
-		attrs[a.Key] = a.Val
-	}
-	return attrs
-}
-
-func tokenType(t *html.Token) string {
-	return t.Data
-}
-
-func isAthing(t *html.Token) (bool, map[string]string) {
-	attrs := attributes(t)
-	cls, ok := attrs["class"]
-	return ok && cls == athing, attrs
-}
-
-func isStoryLink(t *html.Token) (bool, map[string]string) {
-	attrs := attributes(t)
-	cls, ok := attrs["class"]
-	return ok && cls == storylink, attrs
-}
-
-func isClass(t *html.Token, clsType string) (bool, map[string]string) {
-	attrs := attributes(t)
-	cls, ok := attrs["class"]
-	return ok && cls == clsType, attrs
-}
-
-func parsePosts(z *html.Tokenizer) ([]*Post, error) {
-	var post *Post
-	parseErr := &ParseError{}
-	posts := []*Post{}
-
-	state := stateUnint
-
-	for {
-		tt := z.Next()
-
-		switch tt {
-		case html.StartTagToken:
-			t := z.Token()
-			switch tokenType(&t) {
-			case tablerowTag:
-				if isathing, attrs := isAthing(&t); isathing {
-					// log.Printf("athing: %v\n", attrs)
-					// parse Id
-					id, err := strconv.Atoi(attrs["id"])
-					if err != nil {
-						parseErr.msg = "ERROR: parsing <TR CLASS=ATHING ID=$id >\n"
-						continue
-					}
-					post = &Post{ID: id}
-					posts = append(posts, post)
-					state = stateID
-					// log.Printf("creating Post(Id: %d)\n", id)
-				}
-			case anchorTag:
-				if isStryLnk, attrs := isStoryLink(&t); isStryLnk {
-					stryURL, ok := attrs["href"]
-					if !ok {
-						parseErr.msg += "ERROR: <a class=\"storylink\"> missing href"
-						continue
-					}
-					post.URL = stryURL
-					state = stateURL
-				}
-			case spanTag:
-				if isSiteStr, _ := isClass(&t, sitestr); isSiteStr {
-					state = stateSiteStr
-				}
-			}
-		case html.TextToken:
-			// log.Printf("text token: %v\n", string(z.Text()))
-			switch state {
-			case stateURL:
-				post.Title = string(z.Text())
-				state = stateTitle
-			case stateSiteStr:
-				post.SiteStr = string(z.Text())
-				state = stateUnint
-			}
-		case html.ErrorToken:
-			log.Printf("Error token")
-			if len(posts) >= 0 {
-				return posts, nil
-			}
-			return nil, parseErr
-		}
-	}
-}
 
 func fetchHnPage(url string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -180,33 +26,112 @@ func fetchHnPage(url string) (*http.Response, error) {
 	return client.Do(req)
 }
 
-func parseHN() {
+func saveResponse(res *http.Response, logger *log.Logger) {
+
+	file, err := os.Create("html-response.html")
+	if err != nil {
+		logger.Printf("error creating file: %v\n", err.Error())
+		return
+	}
+
+	defer file.Close()
+	defer res.Body.Close()
+
+	bufferedWrite := func(res *http.Response, file *os.File, logger *log.Logger) int64 {
+		buff := make([]byte, 128)
+		var writeOffset int64 = 0
+		for {
+			_, err := res.Body.Read(buff)
+			if err != nil {
+				logger.Printf("Error reading response: %s\n", err.Error())
+				return writeOffset
+			}
+			n, err := file.WriteAt(buff, writeOffset)
+			if err != nil {
+				logger.Printf("error writting to %s= %s\n", file.Name(), err.Error())
+				return writeOffset
+			}
+			writeOffset += int64(n)
+		}
+
+	}
+	n := bufferedWrite(res, file, logger)
+	fmt.Printf("# of bytes written %d -> %s\n", n, file.Name())
+}
+
+func parseHN(logger *log.Logger) {
 	hnURL := "https://news.ycombinator.com/news"
 	response, err := fetchHnPage(hnURL)
 	if err != nil {
-		err = &ParseError{fmt.Sprintf("ERROR fetching HN page: %s", err.Error())}
+		logger.Fatal(err)
 	}
 	if response.StatusCode != 200 {
-		err = &ParseError{fmt.Sprintf("ERROR: HN responded with %s", response.Status)}
+		log.Printf("could not fetch %s responseCode=%d", hnURL, response.StatusCode)
 	}
 
-	if err != nil {
-		log.Fatalln(err.Error())
-	}
 	b := response.Body
 	z := html.NewTokenizer(b)
+	hnscrapper.ParsePosts(z, logger)
+	// posts, err := parsePosts(z)
+	// if err != nil {
+	// 	log.Fatalln(err.Error())
+	// }
 
-	posts, err := parsePosts(z)
-	if err != nil {
-		log.Fatalln(err.Error())
-	}
-
-	for _, p := range posts {
-		log.Println(p.String())
-	}
+	// for _, p := range posts {
+	// 	log.Println(p.String())
+	// }
+	// parsePosts(z)
 }
 
 func main() {
-	parseHN()
-
+	logger := log.New(os.Stdout, "HN-scrapper", log.Lshortfile)
+	parseHN(logger)
 }
+
+// switch currentState {
+// case stateInit:
+// 	// Looking for <tr id=$postId class="athing">
+// 	// on success: stateInit -> stateId
+// case stateID:
+// 	// Looking for storylink <a class = "storylink" href=$postURL
+// 	// on success: stateId -> stateStoryLink
+// case stateStoryLink:
+// 	// Looking for postTitle TextToken**
+// 	// on success: stateStoryLink ->stateStoryTitle
+// case stateStoryTitle:
+// 	// Looking for <span class="sitestr">
+// 	// on success: stateStoryTitle ->stateSiteStrIncoming
+// case stateSitestrIncoming:
+// 	// Looking for postSiteString TextToken**
+// 	// onSuccess: stateSiteStrIncoming -> stateSiteStr
+// case stateSiteStr:
+// 	// Looking for <span id ="score_$postId" class=score>
+// 	// onSuccess: stateSiteStr -> stateScoreIncoming
+// case stateScoreIncoming:
+// 	// Looking $score points TextToken**
+// 	// onSuccess: stateScoreIncoming -> stateScore
+// case stateScore:
+// 	// Looking for <a class="hnuser" href="user?id=$hnuser">
+// 	// onSuccess: stateScore -> stateHnuserIncoming
+// case stateHnuserIncoming:
+// 	// Looking for hnuser TextToken**
+// 	// onSuccess: stateHnuserIncoming -> stateHnuser
+// case stateHnuser:
+// 	// Looking for <span class="age">
+// 	// onSuccess: stateHnuser -> stateAgeIncoming1
+// case stateAgeIncoming1:
+// 	// Looking for <a id="item?id=$postID">
+// 	// onSuccess: stateAgeIncoming1 -> stateAgeIncoming2
+// case stateAgeIncoming2:
+// 	// Looking for $age hours ago TextToken**
+// 	// onSuccess: stateAgeIncoming2 -> stateAge
+// case stateAge:
+// 	// Looking for "hide" TextToken**
+// 	// stateAge -> stateNCommentsIncoming
+// case stateNCommentsIncoming:
+// 	// Looking for $nComments Comments TextToken**
+// 	// stateNCommentsIncoming -> stateNComments
+// case stateNComments:
+// 	// push *post into posts[]*Post
+// 	// stateNComments -> stateInit
+// }
