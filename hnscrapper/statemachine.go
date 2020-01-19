@@ -1,12 +1,12 @@
 package hnscrapper
 
-import "strconv"
-
-import "log"
-
-import "fmt"
-
-import "strings"
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // State pertaining to the parsing state machine
 type State int
@@ -145,16 +145,11 @@ func (psm *PostParsingSM) postPoints(attrs map[string]string) error {
 	if !ok {
 		return &SMError{msg: "could not find points text in Data"}
 	}
-
-	// TODO: Please remove this horrible thing and use Regex to maintain sanity
-	strs := strings.Split(strings.TrimSpace(pointStr), " ")
-	if len(strs) >= 2 { // INT points
-		pts, err := strconv.Atoi(strs[0])
-		if err != nil {
-			return &SMError{msg: fmt.Sprintf("could not parse points text %s", pointStr)}
-		}
-		psm.post.Points = pts
+	n := extractInt(pointStr)
+	if n < 0 {
+		return &SMError{msg: fmt.Sprintf("could not parse points text %s", pointStr)}
 	}
+	psm.post.Points = n
 	return nil
 }
 
@@ -164,6 +159,48 @@ func (psm *PostParsingSM) postUser(attrs map[string]string) error {
 		return &SMError{"could not parse user from TextToken"}
 	}
 	psm.post.User = user
+	return nil
+}
+
+func (psm *PostParsingSM) postAge(attrs map[string]string) error {
+	age, ok := attrs[data]
+	if !ok {
+		return &SMError{"could not age user from TextToken"}
+	}
+	psm.post.Posttime = age
+	return nil
+}
+
+func extractInt(s string) int {
+	ret := 0
+	re := regexp.MustCompile(`[-]?\d[\d,]*[\.]?[\d{2}]*`)
+	submatchall := re.FindAllString(s, -1)
+	if len(submatchall) > 0 {
+		n, err := strconv.Atoi(submatchall[0])
+		if err != nil {
+			n = -1
+		}
+		ret = n
+	}
+	return ret
+}
+
+func (psm *PostParsingSM) postCommentsCount(attrs map[string]string) error {
+	if attrs[tagType] != textToken {
+		return nil
+	}
+
+	strn, ok := attrs[data]
+	if !ok {
+		return &SMError{"could not extract nComments from TextToken"}
+	}
+	strn = strings.TrimSpace(strn)
+
+	n := extractInt(strn)
+	if n < 0 {
+		return &SMError{msg: fmt.Sprintf("could not parse nComments text %s", strn)}
+	}
+	psm.post.CommentsCount = n
 	return nil
 }
 
@@ -185,6 +222,20 @@ func (psm *PostParsingSM) isValidTag(attrs map[string]string) bool {
 		url, hasURL := attrs[href]
 		ret = hasCls && cls == hnuser && hasURL &&
 			strings.Index(strings.TrimSpace(url), "user") == 0
+
+	case stateAgeIncoming1:
+		if tType, ok := attrs[tagType]; !ok || tType != spanTag {
+			break
+		}
+		cls, hasCls := attrs[class]
+		ret = hasCls && cls == "age"
+
+	case stateAgeIncoming2, stateNCommentsIncoming:
+		if tType, ok := attrs[tagType]; !ok || tType != anchorTag {
+			break
+		}
+		url, hasURL := attrs[href]
+		ret = hasURL && strings.Index(strings.TrimSpace(url), fmt.Sprintf("item?id=%d", psm.post.ID)) == 0
 	}
 
 	return ret
@@ -217,12 +268,27 @@ func (psm *PostParsingSM) handleTransitState(attrs map[string]string) error {
 			psm.state = stateHnuserIncoming1
 		}
 	case stateHnuserIncoming1:
-		log.Printf("[stateHnuserIncoming1] attributes: %v", attrs)
 		if isValid := psm.isValidTag(attrs); isValid {
 			log.Printf("[state-transition] stateHnuserIncoming1 -> stateHnuserIncoming2 [postID: %d]", psm.post.ID)
 			psm.state = stateHnuserIncoming2
-		} else {
-			psm.state = stateInit // TODO: Remove
+		}
+	case stateHnuser:
+		// looking for <span class="age">
+		if psm.isValidTag(attrs) {
+			log.Printf("[state-transition] stateHnuser -> stateAgeIncoming1 [postID: %d]", psm.post.ID)
+			psm.state = stateAgeIncoming1
+		}
+
+	case stateAgeIncoming1:
+		// looking for <a href="item?id=$post.ID"
+		if psm.isValidTag(attrs) {
+			log.Printf("[state-transition] stateAgeIncoming1 -> stateAgeIncoming2 [postID: %d]", psm.post.ID)
+			psm.state = stateAgeIncoming2
+		}
+	case stateAge:
+		if psm.isValidTag(attrs) {
+			log.Printf("[state-transition] stateAge -> stateNCommentsIncoming [postID: %d]", psm.post.ID)
+			psm.state = stateNCommentsIncoming
 		}
 	}
 	return err
@@ -305,23 +371,30 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 		}
 		psm.state = stateHnuser
 		log.Printf("[state-transition] stateHnuser -> stateAgeIncoming1 [postID: %d]", psm.post.ID)
-		log.Printf("creating Post{\n\tID: %d, \n\tURL: %s, \n\ttitle:%s, \n\tsitestr: %s, \n\tpoints: %d, \n\tUser:%s }\n",
-			psm.post.ID, psm.post.URL, psm.post.Title, psm.post.SiteStr, psm.post.Points, psm.post.User)
 
-		// TODO: handle states
-	case stateHnuser:
-		psm.state = stateInit
-	case stateAgeIncoming1:
-		psm.state = stateInit
+	case stateHnuser, stateAgeIncoming1:
+		return psm.handleTransitState(attrs)
+
 	case stateAgeIncoming2:
-		psm.state = stateInit
-	case stateAge:
-		psm.state = stateInit
-	case stateNCommentsIncoming:
-		psm.state = stateInit
-	case stateNComments:
-		psm.state = stateInit
+		err := psm.postAge(attrs)
+		if err != nil {
+			log.Fatal("error parsing post-age error:", err)
+			return err
+		}
+		log.Printf("[state-transition] stateAgeIncoming2 -> stateAge [postID: %d]", psm.post.ID)
+		psm.state = stateAge
 
+	case stateAge:
+		psm.handleTransitState(attrs)
+	case stateNCommentsIncoming:
+		err := psm.postCommentsCount(attrs)
+		if err != nil {
+			log.Fatal("error parsing # comments error:", err)
+			return err
+		}
+		psm.state = stateInit
+		log.Printf("[state-transition] stateNCommentsIncoming -> stateInit [postID: %d]", psm.post.ID)
+		log.Println(psm.post.String())
 	}
 
 	return nil
