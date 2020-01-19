@@ -33,10 +33,9 @@ After extracting the source site of the story
 An intermerdiary state
 ### stateScore 
 After extracting the points for the story.   
-### stateHnuserIncoming1 
-### stateHnuserIncoming2 
-Intermediary states    
 ### stateAge
 State after extracting the age of the post usually in the form `$n [minutes|hours| seconds] ago`      
 ### stateNComments
 After Extracting the number of comments at that instant for that story, present in the form `$n comments`.
+
+***
