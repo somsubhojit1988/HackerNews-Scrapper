@@ -39,13 +39,14 @@ const (
 	// Line 2
 	stateScoreIncoming     State = 5
 	stateScore             State = 6
-	stateHnuserIncoming    State = 7
-	stateHnuser            State = 8
-	stateAgeIncoming1      State = 9
-	stateAgeIncoming2      State = 10
-	stateAge               State = 11
-	stateNCommentsIncoming State = 12
-	stateNComments         State = 13
+	stateHnuserIncoming1   State = 7
+	stateHnuserIncoming2   State = 8
+	stateHnuser            State = 9
+	stateAgeIncoming1      State = 10
+	stateAgeIncoming2      State = 11
+	stateAge               State = 12
+	stateNCommentsIncoming State = 13
+	stateNComments         State = 14
 )
 
 func (s State) String() string {
@@ -62,6 +63,26 @@ func (s State) String() string {
 		return "state-sitestr-incoming"
 	case stateSiteStr:
 		return "state-sitestr"
+	case stateScoreIncoming:
+		return "score-incoming"
+	case stateScore:
+		return "state-score"
+	case stateHnuserIncoming1:
+		return "state-hnuser-incoming[1]"
+	case stateHnuserIncoming2:
+		return "state-hnuser-incoming[2]"
+	case stateHnuser:
+		return "state-hnuser"
+	case stateAgeIncoming1:
+		return "state-age-incoming[1]"
+	case stateAgeIncoming2:
+		return "state-age-incoming[2]"
+	case stateAge:
+		return "state-age"
+	case stateNCommentsIncoming:
+		return "state-comments-incoming"
+	case stateNComments:
+		return "state-comments"
 	default:
 		return fmt.Sprintf("Unknown state=%d", s)
 	}
@@ -137,8 +158,40 @@ func (psm *PostParsingSM) postPoints(attrs map[string]string) error {
 	return nil
 }
 
+func (psm *PostParsingSM) postUser(attrs map[string]string) error {
+	user, ok := attrs[data]
+	if !ok {
+		return &SMError{"could not parse user from TextToken"}
+	}
+	psm.post.User = user
+	return nil
+}
+
+func (psm *PostParsingSM) isValidTag(attrs map[string]string) bool {
+	nxtState := psm.state + 1
+	ret := false
+	switch nxtState {
+	case stateHnuserIncoming1:
+		if txt, ok := attrs[data]; ok {
+			ret = strings.TrimSpace(txt) == "by"
+		}
+
+	case stateHnuserIncoming2:
+		// <a class = "hnuser" href = "user?id=$userid">
+		if tType, ok := attrs[tagType]; !ok || tType != anchorTag {
+			break
+		}
+		cls, hasCls := attrs[class]
+		url, hasURL := attrs[href]
+		ret = hasCls && cls == hnuser && hasURL &&
+			strings.Index(strings.TrimSpace(url), "user") == 0
+	}
+
+	return ret
+}
+
 func (psm *PostParsingSM) handleTransitState(attrs map[string]string) error {
-	var err *SMError = nil
+	var err error
 	switch psm.state {
 
 	case stateStoryTitle:
@@ -157,13 +210,26 @@ func (psm *PostParsingSM) handleTransitState(attrs map[string]string) error {
 			psm.state = stateScoreIncoming
 		}
 		// skip the rest
+
+	case stateScore:
+		if psm.isValidTag(attrs) {
+			log.Printf("[state-transition] stateScore -> stateHnuserIncoming1 [postID: %d]", psm.post.ID)
+			psm.state = stateHnuserIncoming1
+		}
+	case stateHnuserIncoming1:
+		log.Printf("[stateHnuserIncoming1] attributes: %v", attrs)
+		if isValid := psm.isValidTag(attrs); isValid {
+			log.Printf("[state-transition] stateHnuserIncoming1 -> stateHnuserIncoming2 [postID: %d]", psm.post.ID)
+			psm.state = stateHnuserIncoming2
+		} else {
+			psm.state = stateInit // TODO: Remove
+		}
 	}
 	return err
 }
 
 // HandleState handles the Post State machine based on the passed map of attributes
 func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
-
 	switch psm.state {
 
 	case stateInit:
@@ -204,6 +270,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 	case stateSitestrIncoming:
 		err := psm.postSitestr(attrs)
 		if err != nil {
+			log.Printf("[ERROR state-transition] Falling back stateSitestrIncoming -> stateInit [postID: %d]", psm.post.ID)
 			psm.state = stateInit
 			return err
 		}
@@ -211,7 +278,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 		psm.state = stateSiteStr
 
 	case stateSiteStr:
-		psm.handleTransitState(attrs)
+		return psm.handleTransitState(attrs)
 
 		// Line 2
 	case stateScoreIncoming:
@@ -223,14 +290,25 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 		}
 		psm.state = stateScore
 		log.Printf("[state-transition] stateScoreIncoming -> stateScore [postID: %d]", psm.post.ID)
-		log.Printf("creating Post{\n\tID: %d, \n\tURL: %s, \n\ttitle:%s, \n\tsitestr: %s, \n\tpoints: %d}\n",
-			psm.post.ID, psm.post.URL, psm.post.Title, psm.post.SiteStr, psm.post.Points)
-		// TODO: handle states
 
 	case stateScore:
-		psm.state = stateInit
-	case stateHnuserIncoming:
-		psm.state = stateInit
+		return psm.handleTransitState(attrs)
+
+	case stateHnuserIncoming1:
+		return psm.handleTransitState(attrs)
+
+	case stateHnuserIncoming2:
+		err := psm.postUser(attrs)
+		if err != nil {
+			log.Fatal("error parsing user error: ", err)
+			return err
+		}
+		psm.state = stateHnuser
+		log.Printf("[state-transition] stateHnuser -> stateAgeIncoming1 [postID: %d]", psm.post.ID)
+		log.Printf("creating Post{\n\tID: %d, \n\tURL: %s, \n\ttitle:%s, \n\tsitestr: %s, \n\tpoints: %d, \n\tUser:%s }\n",
+			psm.post.ID, psm.post.URL, psm.post.Title, psm.post.SiteStr, psm.post.Points, psm.post.User)
+
+		// TODO: handle states
 	case stateHnuser:
 		psm.state = stateInit
 	case stateAgeIncoming1:

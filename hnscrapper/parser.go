@@ -56,10 +56,13 @@ func parseTableRow(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 
 func parseAnchor(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 	attrs := attributes(t)
-	// attrs[tagType] = anchorTag
+	attrs[tagType] = anchorTag
 
 	// for debug
 	// if psm.state == stateID {
+	// 	log.Printf("[parseAnchorTag] calling handleState(attrs = %v)", attrs)
+	// }
+	// if psm.state == stateScore {
 	// 	log.Printf("[parseAnchorTag] calling handleState(attrs = %v)", attrs)
 	// }
 
