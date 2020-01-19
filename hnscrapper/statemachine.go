@@ -302,9 +302,9 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 		if attrs[tagType] != tablerowTag && attrs[class] != athing {
 			return nil
 		}
-
 		err := psm.postInit(attrs)
 		if err != nil {
+			log.Printf("Error: Parsing story ID error= %v", err.Error())
 			return err
 		}
 		log.Printf("[state-transition] stateInit -> stateID [postID: %d]", psm.post.ID)
@@ -315,6 +315,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 		if clsVal, ok := attrs[class]; ok && clsVal == storylink {
 			err := psm.postURL(attrs)
 			if err != nil {
+				log.Printf("Error: Parsing storylink error= %v", err.Error())
 				psm.state = stateInit
 				return err
 			}
@@ -325,6 +326,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 	case stateStoryLink:
 		err := psm.postTitle(attrs)
 		if err != nil {
+			log.Printf("error parsing post Title: %v", err.Error())
 			return err
 		}
 		log.Printf("[state-transition] stateStoryLink -> stateStoryTitle [postID: %d]", psm.post.ID)
@@ -350,7 +352,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 	case stateScoreIncoming:
 		err := psm.postPoints(attrs)
 		if err != nil {
-			log.Printf("handlestate(stateScoreIncoming): failed to parse points err= %v", err)
+			log.Printf("failed to parse points err= %v", err)
 			psm.state = stateInit
 			return err
 		}
@@ -366,7 +368,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 	case stateHnuserIncoming2:
 		err := psm.postUser(attrs)
 		if err != nil {
-			log.Fatal("error parsing user error: ", err)
+			log.Printf("error parsing user error: %v", err)
 			return err
 		}
 		psm.state = stateHnuser
@@ -378,7 +380,7 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 	case stateAgeIncoming2:
 		err := psm.postAge(attrs)
 		if err != nil {
-			log.Fatal("error parsing post-age error:", err)
+			log.Printf("error parsing post-age error:%v", err)
 			return err
 		}
 		log.Printf("[state-transition] stateAgeIncoming2 -> stateAge [postID: %d]", psm.post.ID)
@@ -386,10 +388,11 @@ func (psm *PostParsingSM) HandleState(attrs map[string]string) error {
 
 	case stateAge:
 		psm.handleTransitState(attrs)
+
 	case stateNCommentsIncoming:
 		err := psm.postCommentsCount(attrs)
 		if err != nil {
-			log.Fatal("error parsing # comments error:", err)
+			log.Printf("error parsing # comments error: %v", err)
 			return err
 		}
 		psm.state = stateInit

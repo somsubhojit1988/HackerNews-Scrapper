@@ -39,14 +39,25 @@ func attributes(t *html.Token) map[string]string {
 	for _, a := range t.Attr {
 		attrs[a.Key] = a.Val
 	}
+	switch t.Data {
+	case tablerowTag:
+		attrs[tagType] = tablerowTag
+	case spanTag:
+		attrs[tagType] = spanTag
+	case anchorTag:
+		attrs[tagType] = anchorTag
+	default:
+		if t.Type == html.TextToken {
+			attrs[tagType] = textToken
+			attrs[data] = t.Data
+		}
+	}
 
 	return attrs
 }
 
 func parseTableRow(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 	attrs := attributes(t)
-	attrs[tagType] = tablerowTag
-
 	err := psm.HandleState(attrs)
 	if err != nil {
 		return psm, err
@@ -56,16 +67,6 @@ func parseTableRow(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 
 func parseAnchor(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 	attrs := attributes(t)
-	attrs[tagType] = anchorTag
-
-	// for debug
-	// if psm.state == stateID {
-	// 	log.Printf("[parseAnchorTag] calling handleState(attrs = %v)", attrs)
-	// }
-	// if psm.state == stateScore {
-	// 	log.Printf("[parseAnchorTag] calling handleState(attrs = %v)", attrs)
-	// }
-
 	err := psm.HandleState(attrs)
 	if err != nil {
 		return psm, err
@@ -75,13 +76,6 @@ func parseAnchor(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 
 func parseSpanTag(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 	attrs := attributes(t)
-	attrs[tagType] = spanTag
-
-	// for debug
-	// if psm.state == stateSiteStr {
-	// }
-	// log.Printf("parseSpanTag: calling handleState in state: %s with attrs: %v\n", psm.state.String(), attrs)
-
 	err := psm.HandleState(attrs)
 	if err != nil {
 		return psm, err
@@ -90,17 +84,9 @@ func parseSpanTag(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
 }
 
 func parseTextTag(t *html.Token, psm *PostParsingSM) (*PostParsingSM, error) {
-	tData := t.Data
-	attr := make(map[string]string)
-	attr[tagType] = textToken
-
-	attr[data] = tData
-
-	// if psm.state == stateScoreIncoming {
-	// 	log.Printf("parseTextTag: calling handleState in state: stateScoreIncoming with attrs: %v\n", attr)
-	// }
-
+	attr := attributes(t)
 	err := psm.HandleState(attr)
+
 	if err != nil {
 		return psm, err
 	}
@@ -114,7 +100,6 @@ func ParsePosts(z *html.Tokenizer, logger *log.Logger) {
 	depth := 0
 	for {
 		tt := z.Next()
-		// log.Printf("Token type= %s depth= %d\n", tt.String(), depth)
 		switch tt {
 		case html.StartTagToken:
 			t := z.Token()
@@ -123,7 +108,6 @@ func ParsePosts(z *html.Tokenizer, logger *log.Logger) {
 			case tablerowTag:
 				postSm, err = parseTableRow(&t, postSm)
 				if err != nil {
-					// logger.Printf("[ERROR] parsing <tr>: %s\n", err.Error())
 					continue
 				}
 			case spanTag:
@@ -134,7 +118,6 @@ func ParsePosts(z *html.Tokenizer, logger *log.Logger) {
 			case anchorTag:
 				postSm, err = parseAnchor(&t, postSm)
 				if err != nil {
-					// logger.Printf("[ERROR] parsing <a>: %s\n", err.Error())
 					continue
 				}
 			}
@@ -145,7 +128,6 @@ func ParsePosts(z *html.Tokenizer, logger *log.Logger) {
 			t := z.Token()
 			postSm, err = parseTextTag(&t, postSm)
 			if err != nil {
-				// logger.Printf("[ERROR] parsing text-token: %s\n", err.Error())
 				continue
 			}
 
